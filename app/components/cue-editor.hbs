@@ -104,7 +104,11 @@
                     <span class="cue-index">{{cue.index}}</span>
                     <span class="cue-kind">{{cue.kind}}</span>
                     <h3>{{cue.title}}</h3>
-                    {{#if cue.hasIssue}}<span class="issue-flag">检查</span>{{/if}}
+                    <span class="cue-flags">
+                      {{#if cue.conflicted}}<span class="conflict-flag">分歧</span>{{/if}}
+                      {{#if cue.pending}}<span class="pending-flag">待核对</span>{{/if}}
+                      {{#if cue.hasIssue}}<span class="issue-flag">检查</span>{{/if}}
+                    </span>
                   </div>
                   <p>
                     {{#if cue.lighting}}灯光：{{cue.lighting}}{{/if}}
@@ -146,6 +150,7 @@
             <PaperSelect @label="负责人" @options={{this.ownerOptions}} @selected={{this.draft.owner}} @onChange={{fn this.updateDraft "owner"}} />
             <PaperInput @label="灯光提示" @textarea={{true}} @passThru={{hash rows=2}} @value={{this.draft.lighting}} @onChange={{fn this.updateDraft "lighting"}} />
             <PaperInput @label="音响提示" @textarea={{true}} @passThru={{hash rows=2}} @value={{this.draft.sound}} @onChange={{fn this.updateDraft "sound"}} />
+            <PaperInput @label="上下场" @value={{this.draft.entrance}} @onChange={{fn this.updateDraft "entrance"}} />
             <PaperInput @label="道具（顿号分隔）" @value={{this.draft.props}} @onChange={{fn this.updateDraft "props"}} />
             <PaperInput @label="演员（顿号分隔）" @value={{this.draft.cast}} @onChange={{fn this.updateDraft "cast"}} />
             <PaperInput @label="前置提示 ID" @value={{this.draft.dependsOn}} @onChange={{fn this.updateDraft "dependsOn"}} />
@@ -165,10 +170,15 @@
               <dt>负责人</dt><dd>{{if this.selectedCue.owner this.selectedCue.owner "缺失"}}</dd>
               <dt>灯光</dt><dd>{{if this.selectedCue.lighting this.selectedCue.lighting "—"}}</dd>
               <dt>音响</dt><dd>{{if this.selectedCue.sound this.selectedCue.sound "—"}}</dd>
+              <dt>上下场</dt><dd>{{if this.selectedCue.entrance this.selectedCue.entrance "—"}}</dd>
               <dt>道具</dt><dd>{{if this.selectedCue.props.length this.selectedProps "—"}}</dd>
               <dt>演员</dt><dd>{{if this.selectedCue.cast.length this.selectedCast "—"}}</dd>
               <dt>备注</dt><dd>{{if this.selectedCue.notes this.selectedCue.notes "—"}}</dd>
             </dl>
+            <div class="confirmation-line">
+              <span class="source-chip {{if this.selectedIsShift "is-shift"}}">{{this.selectedSourceLabel}}</span>
+              <small>{{this.selectedBasisLabel}}</small>
+            </div>
             <div class="inspector-actions">
               <PaperButton @onClick={{this.editSelectedCue}} @raised={{true}} @primary={{true}}>编辑提示</PaperButton>
               <PaperButton @onClick={{fn this.moveSelected -1}}>上移一条</PaperButton>
@@ -177,6 +187,82 @@
           </div>
         {{else}}
           <p class="empty-copy">选择一条提示查看详细信息。</p>
+        {{/if}}
+      </section>
+
+      <section class="shift-panel paper-surface">
+        <div class="panel-heading">
+          <div><small>SHIFT SHEET</small><h2>换场单合并</h2></div>
+          <span class="revision-chip">{{this.shiftRevisionLabel}}</span>
+        </div>
+        <div class="shift-body">
+          <div class="shift-status">
+            <span>当前依据：<strong>{{this.shiftRevisionLabel}}</strong></span>
+            {{#if this.mergeProgress}}
+              <span>批次 {{this.mergeProgress.batchId}} · {{this.mergeProgress.current}}/{{this.mergeProgress.total}} 条 · 成功回执 {{this.mergeProgress.receipts}}</span>
+            {{/if}}
+          </div>
+          {{#if this.mergeActive}}
+            <div class="merge-note is-active">正在逐条合并，可随时关闭页面，下次打开从断点继续。</div>
+          {{/if}}
+          {{#if this.mergeFailed}}
+            <div class="merge-note is-failed">
+              <strong>合并中断</strong>
+              <small>{{this.mergeSession.lastError}}</small>
+              <small>进度与成功回执已保留；重试同一批不会重复生成提示。</small>
+            </div>
+          {{/if}}
+          <div class="shift-actions">
+            <PaperButton @onClick={{this.receiveShiftSheet}} @disabled={{this.receiveDisabled}}>接收示例换场单</PaperButton>
+            {{#if this.canStartMerge}}
+              <PaperButton @raised={{true}} @primary={{true}} @onClick={{this.startMerge}}>开始合并</PaperButton>
+            {{/if}}
+            {{#if this.mergeFailed}}
+              <PaperButton @raised={{true}} @primary={{true}} @onClick={{this.retryMerge}}>重试本批</PaperButton>
+              <PaperButton @warn={{true}} @onClick={{this.skipCurrentEntry}}>跳过当前条目</PaperButton>
+            {{/if}}
+          </div>
+        </div>
+        {{#if this.openConflicts.length}}
+          <div class="conflict-list">
+            <small class="section-label">核心字段分歧（{{this.openConflicts.length}}）· 本地与下发并列保留，不自动覆盖</small>
+            {{#each this.openConflicts as |conflict|}}
+              <div class="conflict-card">
+                <div class="conflict-head">
+                  <strong>{{conflict.cueTitle}}</strong>
+                  <span>{{conflict.sceneLabel}} · {{conflict.fieldLabel}} · 换场单 R{{conflict.revision}}</span>
+                </div>
+                <div class="conflict-values">
+                  <div class="conflict-side">
+                    <small>本地提示表</small>
+                    <p>{{conflict.localValue}}</p>
+                  </div>
+                  <div class="conflict-side is-incoming">
+                    <small>换场单下发</small>
+                    <p>{{conflict.incomingValue}}</p>
+                  </div>
+                </div>
+                <div class="conflict-actions">
+                  <PaperButton @onClick={{fn this.resolveConflict conflict.id "incoming"}}>采用下发值</PaperButton>
+                  <PaperButton @onClick={{fn this.resolveConflict conflict.id "local"}}>保留本地值</PaperButton>
+                </div>
+              </div>
+            {{/each}}
+          </div>
+        {{/if}}
+        {{#if this.pendingCues.length}}
+          <div class="pending-list">
+            <small class="section-label">受换场单影响的待核对提示（{{this.pendingCues.length}}）</small>
+            {{#each this.pendingCues as |pending|}}
+              <div class="pending-row">
+                <span>
+                  <strong>{{pending.title}}</strong>
+                  <small>{{pending.sceneLabel}} · {{pending.basisLabel}}</small>
+                </span>
+                <PaperButton @onClick={{fn this.confirmCue pending.id}}>核对确认</PaperButton>
+              </div>
+            {{/each}}
+          </div>
         {{/if}}
       </section>
 
